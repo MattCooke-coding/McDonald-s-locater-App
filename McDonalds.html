@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>McDonald's Locator</title>
+<!-- Leaflet CSS -->
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-sA+5woHXYBcnz7PQS+/Ov9xpNBrvQ2WObyg2oc8B+3g="
+  crossorigin=""
+/>
+<style>
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #f7f7f7;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+  header {
+    background: #d90000;
+    color: white;
+    padding: 1rem;
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    user-select: none;
+  }
+  #info {
+    margin: 1rem auto;
+    text-align: center;
+  }
+  button {
+    background-color: #d90000;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    box-shadow: 0 3px 6px rgba(217,0,0,.5);
+  }
+  button:hover {
+    background-color: #b30000;
+  }
+  #map {
+    height: 60vh;
+    width: 100%;
+    margin-top: 1rem;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    border-radius: 8px;
+  }
+  #locations {
+    max-width: 800px;
+    margin: 1rem auto 2rem auto;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+    padding: 1rem 1.5rem;
+  }
+  #locations h2 {
+    margin-top: 0;
+    color: #d90000;
+  }
+  .location-item {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #eee;
+  }
+  .location-item:last-child {
+    border-bottom: none;
+  }
+  .location-name {
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+  .location-address {
+    font-size: 0.9rem;
+    color: #555;
+  }
+  .location-distance {
+    font-size: 0.9rem;
+    color: #777;
+    font-style: italic;
+  }
+  footer {
+    margin-top: auto;
+    padding: 1rem;
+    text-align: center;
+    font-size: 0.9rem;
+    color: #777;
+  }
+  @media (min-width: 768px) {
+    #map {
+      height: 70vh;
+      max-width: 800px;
+      margin: 1rem auto;
+    }
+  }
+</style>
+</head>
+<body>
+<header>McDonald's Locator</header>
+<div id="info">
+  <button id="findBtn">Find McDonald's Near Me</button>
+  <p id="status"></p>
+</div>
+<div id="map"></div>
+<div id="locations"></div>
+<footer>Data from OpenStreetMap &amp; Overpass API | Map by Leaflet.js</footer>
+
+<!-- Leaflet JS -->
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-oM6cMsEHo6yKPqS5UbP19cZ2k0qPmXy+Uib5AvJKWyk="
+  crossorigin=""
+></script>
+<script>
+  const findBtn = document.getElementById('findBtn');
+  const status = document.getElementById('status');
+  const locationsDiv = document.getElementById('locations');
+  let map, userMarker, markersGroup;
+
+  // Initialize map with a default view (world)
+  function initMap() {
+    map = L.map('map').setView([20, 0], 2);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution:
+        '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }).addTo(map);
+
+    markersGroup = L.layerGroup().addTo(map);
+  }
+
+  function formatDistance(meters) {
+    if (meters < 1000) return meters.toFixed(0) + ' m';
+    else return (meters / 1000).toFixed(2) + ' km';
+  }
+
+  // Haversine formula to calculate distance between two lat-lng points
+  function getDistance(lat1, lon1, lat2, lon2) {
+    function toRad(x) {
+      return (x * Math.PI) / 180;
+    }
+    var R = 6371e3; // meters
+    var φ1 = toRad(lat1);
+    var φ2 = toRad(lat2);
+    var Δφ = toRad(lat2 - lat1);
+    var Δλ = toRad(lon2 - lon1);
+
+    var a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    var d = R * c;
+    return d;
+  }
+
+  // Query Overpass API for McDonald's near given coords
+  async function fetchMcDonalds(lat, lon) {
+    // Overpass QL query to fetch McDonald's nodes and ways within 5km radius
+    const radius = 5000; // meters
+    const query = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="fast_food"]["brand"="McDonald's"](around:${radius},${lat},${lon});
+        way["amenity"="fast_food"]["brand"="McDonald's"](around:${radius},${lat},${lon});
+        relation["amenity"="fast_food"]["brand"="McDonald's"](around:${radius},${lat},${lon});
+      );
+      out center tags;
+    `;
+    const url = "https://overpass-api.de/api/interpreter";
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        body: query,
+        headers: {
+          'Content-Type': 'text/plain'
+        }
+      });
+      const data = await response.json();
+      return data.elements;
+    } catch (error) {
+      console.error('Overpass API error:', error);
+      throw new Error('Failed to fetch McDonald\'s locations. Please try again later.');
+    }
+  }
+
+  function addLocationsToList(locations, userLat, userLon) {
+    if (locations.length === 0) {
+      locationsDiv.innerHTML = '<h2>No McDonald\'s found within 5km radius.</h2>';
+      return;
+    }
+    let html = '<h2>Nearby McDonald\'s Locations:</h2>';
+    locations.forEach((loc, i) => {
+      let name = loc.tags.name || 'McDonald\'s';
+      let lat = loc.lat || (loc.center && loc.center.lat);
+      let lon = loc.lon || (loc.center && loc.center.lon);
+      let addressParts = [];
+      if (loc.tags['addr:housenumber']) addressParts.push(loc.tags['addr:housenumber']);
+      if (loc.tags['addr:street']) addressParts.push(loc.tags['addr:street']);
+      if (loc.tags['addr:city']) addressParts.push(loc.tags['addr:city']);
+      if (loc.tags['addr:postcode']) addressParts.push(loc.tags['addr:postcode']);
+      let address = addressParts.length ? addressParts.join(', ') : 'Address not available';
+
+      let dist = getDistance(userLat, userLon, lat, lon);
+      html += `
+        <div class="location-item">
+          <div class="location-name">${name}</div>
+          <div class="location-address">${address}</div>
+          <div class="location-distance">${formatDistance(dist)} away</div>
+        </div>
+      `;
+    });
+    locationsDiv.innerHTML = html;
+  }
+
+  function addMarkers(locations, userLat, userLon) {
+    // Clear previous markers
+    markersGroup.clearLayers();
+
+    // Add marker for user location
+    if (userMarker) {
+      map.removeLayer(userMarker);
+    }
+    userMarker = L.marker([userLat, userLon], {
+      icon: L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
+        iconSize: [30, 30],
+        iconAnchor: [15, 30],
+        popupAnchor: [0, -30],
+      }),
+      title: 'Your Location',
+    }).addTo(map).bindPopup('Your Location').openPopup();
+
+    // Add markers for McDonald's locations
+    locations.forEach((loc) => {
+      let lat = loc.lat || (loc.center && loc.center.lat);
+      let lon = loc.lon || (loc.center && loc.center.lon);
+      let name = loc.tags.name || 'McDonald\'s';
+      let addressParts = [];
+      if (loc.tags['addr:housenumber']) addressParts.push(loc.tags['addr:housenumber']);
+      if (loc.tags['addr:street']) addressParts.push(loc.tags['addr:street']);
+      if (loc.tags['addr:city']) addressParts.push(loc.tags['addr:city']);
+      if (loc.tags['addr:postcode']) addressParts.push(loc.tags['addr:postcode']);
+      let address = addressParts.length ? addressParts.join(', ') : 'Address not available';
+
+      const marker = L.marker([lat, lon])
+        .addTo(markersGroup)
+        .bindPopup(`<b>${name}</b><br>${address}`);
+    });
+
+    // Fit map bounds to show all markers
+    let groupLatLngs = locations.map((loc) => [loc.lat || (loc.center && loc.center.lat), loc.lon || (loc.center && loc.center.lon)]);
+    groupLatLngs.push([userLat, userLon]);
+    const bounds = L.latLngBounds(groupLatLngs);
+    map.fitBounds(bounds, {padding: [50, 50]});
+  }
+
+  async function locateAndFind() {
+    if (!navigator.geolocation) {
+      status.textContent = 'Geolocation is not supported by your browser.';
+      return;
+    }
+
+    status.textContent = 'Locating…';
+    try {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 15000});
+      });
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      status.textContent = 'Searching for McDonald\'s nearby…';
+
+      const locations = await fetchMcDonalds(lat, lon);
+
+      addMarkers(locations, lat, lon);
+      addLocationsToList(locations, lat, lon);
+      status.textContent = `Found ${locations.length} location${locations.length !== 1 ? 's' : ''} within 5km radius.`;
+    } catch (err) {
+      console.error(err);
+      status.textContent = 'Unable to retrieve location or find McDonald\'s. Please try again.';
+    }
+  }
+
+  initMap();
+
+  findBtn.addEventListener('click', () => {
+    locateAndFind();
+  });
+</script>
+</body>
+</html>
+
